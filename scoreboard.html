@@ -1,0 +1,465 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SMT Replay — Fan Guessing Game</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: #0a0f0a; color: #e8f0e8; font-family: Arial, sans-serif; min-height: 100vh; display: flex; flex-direction: column; align-items: center; padding: 20px; }
+  h1 { font-size: 22px; font-weight: 700; letter-spacing: 2px; text-transform: uppercase; color: #7fff7f; margin-bottom: 6px; }
+  .subtitle { font-size: 13px; color: #6a8f6a; margin-bottom: 20px; letter-spacing: 1px; }
+  .play-selector { display: flex; gap: 10px; margin-bottom: 16px; }
+  .play-btn { background: #1a2a1a; border: 1.5px solid #3a5a3a; color: #a0c8a0; padding: 8px 18px; border-radius: 6px; cursor: pointer; font-size: 13px; font-weight: 600; transition: all 0.15s; }
+  .play-btn:hover { background: #223322; border-color: #5a8a5a; }
+  .play-btn.active { background: #1a4a1a; border-color: #7fff7f; color: #7fff7f; }
+  .field-wrap { position: relative; width: 500px; height: 500px; margin-bottom: 16px; }
+  canvas { border-radius: 8px; display: block; }
+  .score-flash { position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%) scale(0.5); background: rgba(10,20,10,0.93); border: 2px solid #7fff7f; border-radius: 12px; padding: 20px 36px; text-align: center; pointer-events: none; opacity: 0; transition: opacity 0.2s, transform 0.2s; z-index: 10; }
+  .score-flash.show { opacity: 1; transform: translate(-50%,-50%) scale(1); }
+  .score-flash .pts { font-size: 52px; font-weight: 700; line-height: 1; }
+  .score-flash .pts-label { font-size: 13px; color: #6a8f6a; letter-spacing: 1px; margin-top: 4px; }
+  .score-flash .pts-msg { font-size: 14px; color: #c0d8c0; margin-top: 8px; }
+  .timer-bar { width: 500px; display: flex; align-items: center; gap: 12px; margin-bottom: 14px; }
+  .timer-display { font-size: 28px; font-weight: 700; color: #7fff7f; min-width: 70px; font-variant-numeric: tabular-nums; }
+  .progress-track { flex: 1; height: 6px; background: #1a2a1a; border-radius: 3px; overflow: hidden; }
+  .progress-fill { height: 100%; background: #7fff7f; border-radius: 3px; }
+  .controls { display: flex; gap: 10px; margin-bottom: 16px; }
+  .ctrl-btn { background: #1a2a1a; border: 1.5px solid #3a5a3a; color: #a0c8a0; padding: 8px 22px; border-radius: 6px; cursor: pointer; font-size: 14px; font-weight: 600; transition: all 0.15s; }
+  .ctrl-btn:hover { background: #223322; border-color: #7fff7f; color: #7fff7f; }
+  .status-msg { font-size: 13px; color: #6a8f6a; text-align: center; margin-bottom: 12px; min-height: 18px; }
+  .game-panel { width: 500px; background: #0f1f0f; border: 1.5px solid #2a4a2a; border-radius: 10px; padding: 18px 22px; margin-bottom: 14px; }
+  .game-question { font-size: 15px; color: #a0c8a0; margin-bottom: 14px; line-height: 1.5; }
+  .game-question strong { color: #7fff7f; }
+  .slider-row { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; }
+  .slider-row input[type=range] { flex: 1; accent-color: #7fff7f; }
+  .slider-val { font-size: 20px; font-weight: 700; color: #7fff7f; min-width: 60px; font-variant-numeric: tabular-nums; }
+  .guess-btn { width: 100%; background: #1a4a1a; border: 1.5px solid #7fff7f; color: #7fff7f; padding: 10px; border-radius: 6px; cursor: pointer; font-size: 15px; font-weight: 700; letter-spacing: 1px; transition: all 0.15s; }
+  .guess-btn:hover:not(:disabled) { background: #2a5a2a; }
+  .guess-btn:disabled { opacity: 0.5; cursor: default; }
+  .guess-locked { width: 100%; background: #0f2a0f; border: 1.5px solid #3a6a3a; color: #7fff7f; padding: 10px; border-radius: 6px; font-size: 15px; font-weight: 700; letter-spacing: 1px; text-align: center; }
+  .reveal-panel { width: 500px; background: #0f1f0f; border: 1.5px solid #2a4a2a; border-radius: 10px; padding: 18px 22px; display: none; margin-bottom: 14px; }
+  .reveal-panel.show { display: block; }
+  .reveal-title { font-size: 13px; color: #6a8f6a; letter-spacing: 1px; text-transform: uppercase; margin-bottom: 12px; }
+  .reveal-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+  .reveal-label { font-size: 14px; color: #a0c8a0; }
+  .reveal-val { font-size: 20px; font-weight: 700; color: #7fff7f; }
+  .reveal-val.guess { color: #ffdd55; }
+  .score-bar { margin-top: 14px; height: 8px; background: #1a2a1a; border-radius: 4px; overflow: hidden; }
+  .score-fill { height: 100%; border-radius: 4px; transition: width 0.5s ease; }
+  .score-msg { margin-top: 10px; font-size: 15px; font-weight: 700; text-align: center; }
+  .leaderboard { width: 500px; margin-top: 4px; }
+  .lb-title { font-size: 13px; color: #6a8f6a; letter-spacing: 1px; text-transform: uppercase; margin-bottom: 10px; }
+  .lb-row { display: flex; justify-content: space-between; align-items: center; padding: 7px 4px; border-bottom: 0.5px solid #1a2a1a; font-size: 13px; border-radius: 4px; }
+  .lb-row.you { background: #0f2a0f; }
+  .lb-rank { color: #6a8f6a; width: 24px; }
+  .lb-name { color: #c0d8c0; flex: 1; padding-left: 8px; }
+  .lb-score { color: #7fff7f; font-weight: 700; }
+  .legend { width: 500px; display: flex; gap: 16px; margin-bottom: 14px; flex-wrap: wrap; }
+  .legend-item { display: flex; align-items: center; gap: 6px; font-size: 12px; color: #6a8f6a; }
+  .legend-dot { width: 12px; height: 12px; border-radius: 50%; }
+  .legend-line { width: 24px; height: 4px; border-radius: 2px; }
+</style>
+</head>
+<body>
+
+<h1>Replay — Fan Game</h1>
+<p class="subtitle">Watch the play. Guess the time.</p>
+
+<div class="play-selector">
+  <button class="play-btn active" onclick="loadPlay(0)">Play 1 — Extra base</button>
+  <button class="play-btn" onclick="loadPlay(1)">Play 2 — Wall deflection</button>
+  <button class="play-btn" onclick="loadPlay(2)">Play 3 — Close play</button>
+</div>
+
+<div class="legend">
+  <div class="legend-item"><div class="legend-dot" style="background:#111;border:2px solid #ccc"></div>Runner</div>
+  <div class="legend-item"><div class="legend-dot" style="background:#888"></div>Defender</div>
+  <div class="legend-item"><div class="legend-dot" style="background:#fff"></div>Ball</div>
+  <div class="legend-item"><div class="legend-line" style="background:#3a66cc"></div>Slow</div>
+  <div class="legend-item"><div class="legend-line" style="background:#ffcc00"></div>Medium</div>
+  <div class="legend-item"><div class="legend-line" style="background:#ff3333"></div>Sprint</div>
+</div>
+
+<div class="field-wrap">
+  <canvas id="field" width="500" height="500"></canvas>
+  <div class="score-flash" id="scoreFlash">
+    <div class="pts" id="flashPts">85</div>
+    <div class="pts-label">POINTS</div>
+    <div class="pts-msg" id="flashMsg"></div>
+  </div>
+</div>
+
+<div class="timer-bar">
+  <div class="timer-display" id="timer">0.00s</div>
+  <div class="progress-track"><div class="progress-fill" id="prog" style="width:0%"></div></div>
+</div>
+
+<div class="controls">
+  <button class="ctrl-btn" id="playBtn" onclick="togglePlay()">&#9654; Play</button>
+  <button class="ctrl-btn" onclick="resetPlay()">&#8635; Reset</button>
+</div>
+
+<div class="status-msg" id="statusMsg">Loading...</div>
+
+<div class="game-panel">
+  <div class="game-question" id="gameQuestion">—</div>
+  <div class="slider-row">
+    <input type="range" id="guessSlider" min="0" max="20" step="0.01" value="10" oninput="updateSlider()">
+    <div class="slider-val" id="sliderVal">10.00s</div>
+  </div>
+  <div id="guessBtnArea">
+    <button class="guess-btn" id="guessBtn" onclick="submitGuess()">Lock in my guess</button>
+  </div>
+</div>
+
+<div class="reveal-panel" id="revealPanel">
+  <div class="reveal-title">Result</div>
+  <div class="reveal-row">
+    <div class="reveal-label">Your guess</div>
+    <div class="reveal-val guess" id="revealGuess">—</div>
+  </div>
+  <div class="reveal-row">
+    <div class="reveal-label">Actual time</div>
+    <div class="reveal-val" id="revealActual">—</div>
+  </div>
+  <div class="reveal-row">
+    <div class="reveal-label">Difference</div>
+    <div class="reveal-val" id="revealDiff">—</div>
+  </div>
+  <div class="score-bar"><div class="score-fill" id="scoreFill"></div></div>
+  <div class="score-msg" id="scoreMsg"></div>
+</div>
+
+<div class="leaderboard">
+  <div class="lb-title">Leaderboard — tonight's game</div>
+  <div id="lbRows"></div>
+  <div style="font-size:11px;color:#3a5a3a;margin-top:8px;">* In live deployment, scores update in real time from fan submissions via mobile app</div>
+</div>
+
+<script>
+const PLAYS = [
+  { file: 'play1_extra_base.json' },
+  { file: 'play2_wall_deflection.json' },
+  { file: 'play3_close_play.json' }
+];
+
+const QUESTIONS = [
+  { player: 11, base: 'home',  text: 'How long did it take the <strong>runner on 1B to score</strong> from the moment of contact?' },
+  { player: 10, base: 'third', text: 'How long did it take the <strong>batter to reach 3B</strong> after the ball caromed off the wall?' },
+  { player: 11, base: 'third', text: 'How long did it take the <strong>runner on 1B to reach 3B</strong> on this close play?' }
+];
+
+const LEADERBOARD = [
+  { name: 'Player 441', score: 97, you: false },
+  { name: 'Player 882', score: 91, you: false },
+  { name: 'Player 217', score: 88, you: false },
+  { name: 'Player 563', score: 76, you: false },
+  { name: 'Player 109', score: 71, you: false }
+];
+
+let playData      = null;
+let playing       = false;
+let animFrame     = null;
+let currentT      = 0;
+let maxT          = 0;
+let lastTimestamp = null;
+let guessLocked   = false;
+let guessValue    = null;
+let answerTime    = null;
+const TRAIL = 22;
+
+const canvas = document.getElementById('field');
+const ctx    = canvas.getContext('2d');
+const W = 500, H = 500;
+
+function toCanvas(fx, fy) {
+  return [W / 2 + fx * 1.6, H * 0.82 - fy * 1.6];
+}
+
+function speedColor(s) {
+  s = Math.max(0, Math.min(1, s || 0));
+  if (s < 0.5) {
+    const t = s * 2;
+    return [Math.round(58 + t * 157), Math.round(102 + t * 92), Math.round(204 - t * 51)];
+  }
+  const t = (s - 0.5) * 2;
+  return [255, Math.round(204 - t * 204), 0];
+}
+
+function drawField() {
+  ctx.clearRect(0, 0, W, H);
+  ctx.fillStyle = '#0d1f0d';
+  ctx.fillRect(0, 0, W, H);
+
+  const home   = toCanvas(0, 0);
+  const first  = toCanvas(63.63, 63.63);
+  const second = toCanvas(0, 127.27);
+  const third  = toCanvas(-63.63, 63.63);
+
+  ctx.strokeStyle = '#1e3a1e';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.arc(...toCanvas(0, 0), 95, -Math.PI, 0);
+  ctx.stroke();
+
+  ctx.strokeStyle = '#2a5a1e';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(...home); ctx.lineTo(...toCanvas(-200, 200));
+  ctx.moveTo(...home); ctx.lineTo(...toCanvas(200, 200));
+  ctx.stroke();
+
+  ctx.strokeStyle = '#3a6a3a';
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.moveTo(...home); ctx.lineTo(...first);
+  ctx.lineTo(...second); ctx.lineTo(...third);
+  ctx.lineTo(...home);
+  ctx.stroke();
+
+  [{ pos: home, label: 'H' }, { pos: first, label: '1' },
+   { pos: second, label: '2' }, { pos: third, label: '3' }].forEach(b => {
+    ctx.fillStyle = '#e8e8e8';
+    ctx.fillRect(b.pos[0] - 5, b.pos[1] - 5, 10, 10);
+    ctx.fillStyle = '#0d1f0d';
+    ctx.font = 'bold 8px Arial';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(b.label, b.pos[0], b.pos[1]);
+  });
+}
+
+function framesUpTo(arr, t, idKey) {
+  if (!arr || !Array.isArray(arr)) return {};
+  const map = {};
+  for (const row of arr) {
+    if (row.t > t) continue;
+    const id = row[idKey];
+    if (!map[id]) map[id] = [];
+    map[id].push(row);
+  }
+  return map;
+}
+
+function drawFrame(t) {
+  drawField();
+  if (!playData) return;
+
+  const ballUpTo  = (playData.ball || []).filter(b => b.t <= t);
+  const ballTrail = ballUpTo.slice(-TRAIL);
+
+  if (ballTrail.length > 1) {
+    for (let i = 1; i < ballTrail.length; i++) {
+      const alpha = (i / ballTrail.length) * 0.5;
+      const [x1, y1] = toCanvas(ballTrail[i-1].x, ballTrail[i-1].y);
+      const [x2, y2] = toCanvas(ballTrail[i].x, ballTrail[i].y);
+      ctx.strokeStyle = `rgba(255,255,255,${alpha.toFixed(2)})`;
+      ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
+    }
+  }
+
+  const defMap = framesUpTo(playData.defenders, t, 'player_id');
+  Object.values(defMap).forEach(frames => {
+    const last = frames[frames.length - 1];
+    const [cx, cy] = toCanvas(last.x, last.y);
+    ctx.fillStyle = '#888888';
+    ctx.beginPath(); ctx.arc(cx, cy, 5, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = 'rgba(220,220,220,0.35)';
+    ctx.lineWidth = 1; ctx.stroke();
+  });
+
+  const runMap = framesUpTo(playData.runners, t, 'player_id');
+  Object.values(runMap).forEach(frames => {
+    const trail = frames.slice(-TRAIL);
+    if (trail.length > 1) {
+      for (let i = 1; i < trail.length; i++) {
+        const alpha = 0.35 + (i / trail.length) * 0.65;
+        const [r, g, b] = speedColor(trail[i].speed_norm);
+        const [x1, y1] = toCanvas(trail[i-1].x, trail[i-1].y);
+        const [x2, y2] = toCanvas(trail[i].x, trail[i].y);
+        ctx.strokeStyle = `rgba(${r},${g},${b},${alpha.toFixed(2)})`;
+        ctx.lineWidth = 5;
+        ctx.lineCap = 'round';
+        ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
+      }
+    }
+    if (trail.length) {
+      const last = trail[trail.length - 1];
+      const [cx, cy] = toCanvas(last.x, last.y);
+      ctx.fillStyle = '#111111';
+      ctx.beginPath(); ctx.arc(cx, cy, 7, 0, Math.PI * 2); ctx.fill();
+      ctx.strokeStyle = 'rgba(255,255,255,0.85)';
+      ctx.lineWidth = 2; ctx.stroke();
+    }
+  });
+
+  if (ballTrail.length) {
+    const b = ballTrail[ballTrail.length - 1];
+    const [bx, by] = toCanvas(b.x, b.y);
+    const r = Math.max(4, Math.min(10, 5 + (b.z || 0) * 0.25));
+    ctx.fillStyle = '#ffffff';
+    ctx.beginPath(); ctx.arc(bx, by, r, 0, Math.PI * 2); ctx.fill();
+  }
+
+  document.getElementById('timer').textContent = (t / 1000).toFixed(2) + 's';
+  document.getElementById('prog').style.width = (t / maxT * 100).toFixed(1) + '%';
+}
+
+function revealResult() {
+  if (!guessLocked) return;
+
+  const guess  = guessValue;
+  const actual = answerTime;
+  const diff   = Math.abs(guess - actual);
+  const score  = Math.max(0, Math.round(100 - diff * 20));
+  const color  = score >= 80 ? '#7fff7f' : score >= 50 ? '#ffdd55' : '#ff6666';
+  const msg    = score >= 90 ? 'Incredible — nearly perfect!' :
+                 score >= 70 ? 'Great read of the play!' :
+                 score >= 40 ? 'Solid guess!' : 'Keep watching those replays!';
+
+  document.getElementById('revealGuess').textContent  = guess.toFixed(2) + 's';
+  document.getElementById('revealActual').textContent = actual.toFixed(2) + 's';
+  document.getElementById('revealDiff').textContent   = diff.toFixed(2) + 's off';
+  document.getElementById('scoreFill').style.cssText  = `background:${color};width:${score}%`;
+  document.getElementById('scoreMsg').textContent     = msg;
+  document.getElementById('scoreMsg').style.color     = color;
+  document.getElementById('revealPanel').classList.add('show');
+
+  document.getElementById('flashPts').textContent = score;
+  document.getElementById('flashPts').style.color = color;
+  document.getElementById('flashMsg').textContent = msg;
+  const flash = document.getElementById('scoreFlash');
+  flash.classList.add('show');
+  setTimeout(() => flash.classList.remove('show'), 2800);
+
+  const pid = 'Player ' + Math.floor(Math.random() * 900 + 100);
+  LEADERBOARD.forEach(r => r.you = false);
+  LEADERBOARD.push({ name: pid + ' (you)', score, you: true });
+  LEADERBOARD.sort((a, b) => b.score - a.score);
+  while (LEADERBOARD.length > 6) LEADERBOARD.pop();
+  renderLeaderboard();
+}
+
+function animate(ts) {
+  if (!lastTimestamp) lastTimestamp = ts;
+  currentT = Math.min(currentT + (ts - lastTimestamp), maxT);
+  lastTimestamp = ts;
+  drawFrame(currentT);
+
+  if (currentT >= maxT) {
+    playing = false;
+    document.getElementById('playBtn').innerHTML = '&#9654; Play';
+    document.getElementById('statusMsg').textContent = guessLocked
+      ? 'Play complete — see how you did!'
+      : 'Play complete — lock in your guess!';
+    revealResult();
+    return;
+  }
+  if (playing) animFrame = requestAnimationFrame(animate);
+}
+
+function togglePlay() {
+  if (!playData) return;
+  playing = !playing;
+  document.getElementById('playBtn').innerHTML = playing ? '&#9646;&#9646; Pause' : '&#9654; Play';
+  if (playing) { lastTimestamp = null; animFrame = requestAnimationFrame(animate); }
+  else cancelAnimationFrame(animFrame);
+}
+
+function resetPlay() {
+  playing = false;
+  cancelAnimationFrame(animFrame);
+  currentT = 0; lastTimestamp = null;
+  guessLocked = false; guessValue = null;
+  document.getElementById('playBtn').innerHTML = '&#9654; Play';
+  document.getElementById('revealPanel').classList.remove('show');
+  document.getElementById('scoreFlash').classList.remove('show');
+  document.getElementById('statusMsg').textContent = 'Press play to watch the replay';
+  document.getElementById('guessSlider').disabled = false;
+  document.getElementById('guessBtnArea').innerHTML =
+    '<button class="guess-btn" id="guessBtn" onclick="submitGuess()">Lock in my guess</button>';
+  drawFrame(0);
+}
+
+function updateSlider() {
+  if (guessLocked) return;
+  document.getElementById('sliderVal').textContent =
+    parseFloat(document.getElementById('guessSlider').value).toFixed(2) + 's';
+}
+
+function submitGuess() {
+  if (!playData || guessLocked) return;
+  guessLocked = true;
+  guessValue  = parseFloat(document.getElementById('guessSlider').value);
+
+  document.getElementById('guessSlider').disabled = true;
+  document.getElementById('guessBtnArea').innerHTML = `
+    <div class="guess-locked">
+      &#10003; Guess locked in at ${guessValue.toFixed(2)}s — result reveals at end of play
+    </div>`;
+
+  document.getElementById('statusMsg').textContent = 'Guess locked! Watch the rest of the play…';
+
+  if (currentT >= maxT) revealResult();
+}
+
+function renderLeaderboard() {
+  document.getElementById('lbRows').innerHTML = LEADERBOARD.slice(0, 5).map((r, i) => `
+    <div class="lb-row${r.you ? ' you' : ''}">
+      <div class="lb-rank">${i + 1}</div>
+      <div class="lb-name">${r.name}${r.you ? ' &#9733;' : ''}</div>
+      <div class="lb-score">${r.score} pts</div>
+    </div>`).join('');
+}
+
+async function loadPlay(idx) {
+  cancelAnimationFrame(animFrame);
+  playing = false; currentT = 0; lastTimestamp = null;
+  guessLocked = false; guessValue = null; playData = null;
+
+  document.querySelectorAll('.play-btn').forEach((b, i) => b.classList.toggle('active', i === idx));
+  document.getElementById('statusMsg').textContent = 'Loading play data…';
+  document.getElementById('revealPanel').classList.remove('show');
+  document.getElementById('scoreFlash').classList.remove('show');
+  document.getElementById('playBtn').innerHTML = '&#9654; Play';
+  document.getElementById('guessSlider').disabled = false;
+  document.getElementById('guessBtnArea').innerHTML =
+    '<button class="guess-btn" id="guessBtn" onclick="submitGuess()">Lock in my guess</button>';
+
+  drawField();
+
+  try {
+    const res = await fetch(PLAYS[idx].file);
+    if (!res.ok) throw new Error('Not found: ' + PLAYS[idx].file);
+    playData = await res.json();
+    maxT = playData.meta.duration_s * 1000;
+
+    document.getElementById('gameQuestion').innerHTML = QUESTIONS[idx].text;
+
+    const q   = QUESTIONS[idx];
+    const ans = (playData.answers || []).find(a => a.player_id === q.player && a.base === q.base);
+    answerTime = ans ? ans.elapsed_s : playData.meta.duration_s;
+
+    const sliderMax = Math.ceil(playData.meta.duration_s + 5);
+    const sliderDef = parseFloat((playData.meta.duration_s * 0.55).toFixed(2));
+    const sl = document.getElementById('guessSlider');
+    sl.max = sliderMax; sl.value = sliderDef;
+    document.getElementById('sliderVal').textContent = sliderDef.toFixed(2) + 's';
+
+    drawFrame(0);
+    document.getElementById('statusMsg').textContent = 'Press play to watch the replay';
+  } catch(e) {
+    document.getElementById('statusMsg').textContent =
+      'Could not load play — make sure JSON files are in the same folder as this HTML file.';
+    console.error(e);
+  }
+}
+
+renderLeaderboard();
+drawField();
+loadPlay(0);
+</script>
+</body>
+</html>

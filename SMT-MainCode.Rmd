@@ -1,0 +1,411 @@
+---
+title: "SMT-MainCodeChunk"
+output: pdf_document
+---
+```{r setup, include=FALSE}
+source("path/to/SMT-SetupChunk.R")
+```
+
+```{r explore-dataset-scale}
+# Get a sense of the dataset's size before filtering
+dataset_scale <- ball_events %>%
+  summarise(
+    total_events = n(),
+    unique_games = n_distinct(game_string),
+    unique_plays = n_distinct(play_per_game)
+  ) %>%
+  collect()
+
+print(dataset_scale)
+```
+
+```{r build-play-summary}
+#Summarise each play's key characteristics
+play_summary <- ball_events %>%
+  group_by(game_string, play_per_game) %>%
+  summarise(
+    has_hit      = any(ball_eventcode == 4),
+    has_wall_hit = any(ball_eventcode == 10),
+    throw_count  = sum(ball_eventcode == 3),
+    duration_s   = (max(timestamp) - min(timestamp)) / 1000,
+    .groups      = "drop"
+  ) %>%
+  collect() %>%
+  filter(!is.na(game_string), !is.na(play_per_game))  # drop NA artifact rows
+
+# Step 2: Build runner context from lineups
+runner_context <- lineups %>%
+  select(game_string, play_per_game, on_1b, on_2b, on_3b) %>%
+  distinct(game_string, play_per_game, .keep_all = TRUE) %>%
+  mutate(runners_on_base = !is.na(on_1b) + !is.na(on_2b) + !is.na(on_3b)) %>%
+  select(game_string, play_per_game, runners_on_base)
+
+# Step 3: Join runner context in play_summary
+play_summary <- play_summary %>%
+  left_join(runner_context, by = c("game_string", "play_per_game"))
+colnames(play_summary)
+```
+
+```{r find-candidates}
+# Category A: Extra-base hit with runners on
+extra_base_candidates <- play_summary %>%
+  filter(has_hit == TRUE, runners_on_base >= 1, throw_count >= 2) %>%
+  arrange(desc(throw_count), desc(duration_s)) %>%
+  head(10)
+
+# Category B: ball hit to wall with a relay
+wall_candidates <- play_summary %>%
+  filter(has_wall_hit == TRUE, throw_count >= 2) %>%
+  arrange(desc(throw_count), desc(duration_s)) %>%
+  head(10)
+
+print(extra_base_candidates)
+print(wall_candidates)
+
+create_play_by_play("y1_d198_JGO_VAS", 94)
+create_play_by_play("y1_d133_ARN_VAS", 89)
+```
+
+```{r verify-candidates}
+create_play_by_play_fixed <- function(game_string_input, play_per_game_input) {
+  
+  # Convert player_id numbers to position labels
+  player_position_definition <- function(code) {
+    switch(as.character(code),
+      "0" = "none", "1" = "pitcher", "2" = "catcher",
+      "3" = "first baseman", "4" = "second baseman", "5" = "third baseman",
+      "6" = "shortstop", "7" = "left fielder", "8" = "center fielder",
+      "9" = "right fielder", "10" = "batter", "11" = "runner on first base",
+      "12" = "runner on second base", "13" = "runner on third base",
+      "14" = "home plate umpire", "15" = "field umpire", "16" = "field umpire",
+      "17" = "field umpire", "18" = "first base coach", "19" = "third base coach",
+      "255" = "ball event with no player"
+    )
+  }
+  
+  # Convert ball_eventcode numbers to easier to remember event labels
+  game_events_definition <- function(code) {
+    switch(as.character(code),
+      "1" = "pitch thrown", "2" = "ball acquired", "3" = "throw (ball-in-play)",
+      "4" = "ball hit into play", "5" = "end of play", "6" = "pickoff throw",
+      "7" = "ball acquired - unknown field position",
+      "8" = "throw (ball-in-play) - unknown field position",
+      "9" = "ball deflection", "10" = "ball deflection off of wall",
+      "11" = "home run", "16" = "ball bounce"
+    )
+  }
+  
+  # Filter to the specific play and build better play-by-play string
+  ball_events %>%
+    filter(game_string == game_string_input,
+           play_per_game == play_per_game_input) %>%
+    select(ball_eventcode, player_id) %>%
+    collect() %>%
+    mutate(
+      event  = map_chr(ball_eventcode, game_events_definition),
+      player = map_chr(player_id, player_position_definition),
+      pbp    = case_when(
+        player != "none" & ball_eventcode != 16 ~ paste(event, "by", player),
+        .default = event
+      )
+    ) %>%
+    pull(pbp) %>%
+    paste(collapse = ", ") %>%
+    tools::toTitleCase()
+}
+
+# Verify top candidates
+create_play_by_play_fixed("y1_d198_JGO_VAS", 94)   # Wall deflection 
+create_play_by_play_fixed("y1_d133_ARN_VAS", 89)   # Wall deflection 
+create_play_by_play_fixed("y1_d084_NXS_ARN", 55)   # Extra-base hit 
+create_play_by_play_fixed("y1_d139_VAS_ARN", 219)  # Extra-base hit 
+```
+
+```{r animations}
+gif1 <- animate_play("y1_d110_SPL_PHD", 171)
+anim_save("play1.gif", gif1)
+
+gif2 <- animate_play("y1_d207_ATL_PHD", 91)
+anim_save("play2.gif", gif2)
+
+gif3 <- animate_play("y1_d197_ARN_PHD", 220)
+anim_save("play3.gif", gif3)
+```
+
+```{r phase2-extract-play1}
+# For each selected play, extract only the columns and rows needed for the
+# web app. keeps JSON files small
+#(Extra-base hit): y1_d110_SPL_PHD, play 171
+#(Wall deflection): y1_d207_ATL_PHD, play 91  
+#(Close play at plate): y1_d197_ARN_PHD, play 220
+
+# Helper function: extract all tracking data for one play
+# Returns a list with ball positions, runner positions, and timestamps
+extract_play_data <- function(game_string_input, play_per_game_input) {
+  
+  # Step 1: Get key timestamps
+  # need to know exactly when the ball was hit and when play ended
+  events <- ball_events %>%
+    filter(game_string == game_string_input,
+           play_per_game == play_per_game_input) %>%
+    collect() %>%
+    mutate(across(c(timestamp, ball_eventcode, player_id), as.numeric))
+  
+  # Timestamp when ball was put into play (eventcode 4)
+  t_hit <- events %>%
+    filter(ball_eventcode == 4) %>%
+    slice(1) %>%
+    pull(timestamp)
+  
+  # Timestamp when play ended (eventcode 5)
+  t_end <- events %>%
+    filter(ball_eventcode == 5) %>%
+    slice(1) %>%
+    pull(timestamp)
+  
+  # Step 2: Extract ball positions from hit to end of play
+  ball <- ball_positions %>%
+    filter(game_string == game_string_input,
+           play_per_game == play_per_game_input) %>%
+    collect() %>%
+    mutate(across(c(timestamp, ball_position_x, 
+                    ball_position_y, ball_position_z), as.numeric)) %>%
+    filter(timestamp >= t_hit, timestamp <= t_end) %>%
+    select(timestamp, x = ball_position_x, 
+           y = ball_position_y, z = ball_position_z)
+  
+  # Step 3: runner positions (player_ids 10-13 = batter + runners) 
+  #only care about offensive players for the game
+  runners <- player_positions %>%
+    filter(game_string == game_string_input,
+           play_per_game == play_per_game_input) %>%
+    collect() %>%
+    mutate(across(c(timestamp, field_x, field_y, player_id), as.numeric)) %>%
+    filter(player_id >= 10, player_id <= 13,        # offense only
+           timestamp >= t_hit, timestamp <= t_end) %>%
+    select(timestamp, player_id, x = field_x, y = field_y)
+  
+  # Step 4: Get lineup context for play
+  # This tells us which bases were occupied
+  lineup_context <- lineups %>%
+    filter(game_string == game_string_input,
+           play_per_game == play_per_game_input) %>%
+    slice(1) %>%
+    select(on_1b, on_2b, on_3b, batter)
+  
+  # Step 5: Package into a list
+  list(
+    game_string    = game_string_input,
+    play_per_game  = play_per_game_input,
+    t_hit          = t_hit,
+    t_end          = t_end,
+    duration_s     = (t_end - t_hit) / 1000,
+    lineup         = lineup_context,
+    ball           = ball,
+    runners        = runners
+  )
+}
+
+# Extract all three plays
+play1_data <- extract_play_data("y1_d110_SPL_PHD", 171)
+play2_data <- extract_play_data("y1_d207_ATL_PHD", 91)
+play3_data <- extract_play_data("y1_d197_ARN_PHD", 220)
+
+#check
+cat("Play 1 duration:", play1_data$duration_s, "seconds\n")
+cat("Play 1 ball positions:", nrow(play1_data$ball), "frames\n")
+cat("Play 1 runner positions:", nrow(play1_data$runners), "frames\n\n")
+
+cat("Play 2 duration:", play2_data$duration_s, "seconds\n")
+cat("Play 2 ball positions:", nrow(play2_data$ball), "frames\n")
+cat("Play 2 runner positions:", nrow(play2_data$runners), "frames\n\n")
+
+cat("Play 3 duration:", play3_data$duration_s, "seconds\n")
+cat("Play 3 ball positions:", nrow(play3_data$ball), "frames\n")
+cat("Play 3 runner positions:", nrow(play3_data$runners), "frames\n")
+```
+
+```{r phase2-time-to-base}
+# Using field coordinates, find the moment each runner was
+# closest to each base and calculate  time since the ball was hit.
+# This "time to base" value is what fans will guess in the game.
+
+# Base coordinates in the SMT coordinate system (feet)
+bases <- tibble(
+  base     = c("home", "first", "second", "third"),
+  base_x   = c(0,      63.63,   0,        -63.63),
+  base_y   = c(0,      63.63,   127.27,    63.63)
+)
+
+# Helper function: find time each runner reached each base
+calculate_time_to_base <- function(play_data) {
+  
+  runners <- play_data$runners
+  t_hit   <- play_data$t_hit
+  
+  # For each runner, calculate distance to each base at every timestamp
+  runners %>%
+    crossing(bases) %>%                       
+    mutate(
+      dist_to_base = sqrt((x - base_x)^2 + (y - base_y)^2),  # distance formula
+      elapsed_s    = (timestamp - t_hit) / 1000               # seconds since hit
+    ) %>%
+    # For each runner + base combo, find the timestamp of closest
+    group_by(player_id, base) %>%
+    slice_min(dist_to_base, n = 1) %>%
+    ungroup() %>%
+    # Only keep base touches where the runner actually got close  (10 feet)
+    filter(dist_to_base <= 10) %>%
+    select(player_id, base, elapsed_s, dist_to_base) %>%
+    arrange(player_id, elapsed_s)
+}
+
+# Calculate for all three plays
+play1_times <- calculate_time_to_base(play1_data)
+play2_times <- calculate_time_to_base(play2_data)
+play3_times <- calculate_time_to_base(play3_data)
+
+# Print results
+cat("=== Play 1 (Extra-base hit) ===\n")
+print(play1_times)
+
+cat("\n=== Play 2 (Wall deflection) ===\n")
+print(play2_times)
+
+cat("\n=== Play 3 (Close play at plate) ===\n")
+print(play3_times)
+```
+
+```{r phase2-calculate-speed}
+# Speed is calculatwd from position change between consecutive timestamps.
+# Distance / time gives feet per second, which is normalized to a 0-1 scale
+# for coloring in the app (0 = stopped, 1 = top sprint speed).
+SPRINT_CAP_FT_S <- 35  # feet per second at full sprint (ceiling)
+# Helper: calculate speed for one play's runner data
+add_speed <- function(runners_df, t_hit) {
+  runners_df %>%
+    arrange(player_id, timestamp) %>%
+    group_by(player_id) %>%
+    mutate(
+      dt_s        = (timestamp - lag(timestamp)) / 1000,  # time delta in seconds
+      dx          = x - lag(x),                            # x displacement
+      dy          = y - lag(y),                            # y displacement
+      dist_ft     = sqrt(dx^2 + dy^2),                     # distance in feet
+      speed_ft_s  = dist_ft / dt_s,                        # feet per second
+      # Normalize to 0-1 scale capped at sprint speed
+      speed_norm  = pmin(speed_ft_s / SPRINT_CAP_FT_S, 1),
+      # Replace NA on first row of each runner with 0
+      speed_norm  = replace_na(speed_norm, 0),
+      # Time since hit in milliseconds for the app
+      t           = round(timestamp - t_hit)
+    ) %>%
+    ungroup() %>%
+    select(t, player_id, x = x, y = y, speed_norm)
+}
+
+# Calculate speed for all three plays
+play1_runners_speed <- add_speed(play1_data$runners, play1_data$t_hit)
+play2_runners_speed <- add_speed(play2_data$runners, play2_data$t_hit)
+play3_runners_speed <- add_speed(play3_data$runners, play3_data$t_hit)
+
+# Quick check
+cat("Play 1 speed range:", 
+    round(min(play1_runners_speed$speed_norm, na.rm=T), 2), "to",
+    round(max(play1_runners_speed$speed_norm, na.rm=T), 2), "\n")
+
+cat("Play 2 speed range:", 
+    round(min(play2_runners_speed$speed_norm, na.rm=T), 2), "to",
+    round(max(play2_runners_speed$speed_norm, na.rm=T), 2), "\n")
+
+cat("Play 3 speed range:", 
+    round(min(play3_runners_speed$speed_norm, na.rm=T), 2), "to",
+    round(max(play3_runners_speed$speed_norm, na.rm=T), 2), "\n")
+```
+
+```{r phase2-reexport-with-defenders}
+# We add defensive player positions (player_ids 1-9) to the JSON so the
+# scoreboard replay shows the full field picture, not just runners.
+library(jsonlite)
+
+export_play_json_v3 <- function(play_data, play_times,
+                                 runners_speed, play_label, filename) {
+
+  # Ball positions, ms since hit
+  ball_clean <- play_data$ball %>%
+    mutate(
+      t = round(timestamp - play_data$t_hit),
+      x = round(x, 2),
+      y = round(y, 2),
+      z = round(z, 2)
+    ) %>%
+    select(t, x, y, z)
+
+  # Runner positions with speed for trail coloring (player_ids 10-13)
+  runners_clean <- runners_speed %>%
+    mutate(
+      x          = round(x, 2),
+      y          = round(y, 2),
+      speed_norm = round(speed_norm, 3),
+      player_id  = as.integer(player_id)
+    ) %>%
+    select(t, player_id, x, y, speed_norm)
+
+  # Defender positions (player_ids 1-9)
+  defenders_clean <- player_positions %>%
+    filter(game_string == play_data$game_string,
+           play_per_game == play_data$play_per_game) %>%
+    collect() %>%
+    mutate(across(c(timestamp, field_x, field_y, player_id), as.numeric)) %>%
+    filter(player_id >= 1, player_id <= 9,
+           timestamp >= play_data$t_hit,
+           timestamp <= play_data$t_end) %>%
+    mutate(
+      t         = round(timestamp - play_data$t_hit),
+      x         = round(field_x, 2),
+      y         = round(field_y, 2),
+      player_id = as.integer(player_id)
+    ) %>%
+    select(t, player_id, x, y)
+
+  # Time-to-base answers for the guessing game reveal
+  answers <- play_times %>%
+    mutate(elapsed_s = round(elapsed_s, 2)) %>%
+    select(player_id, base, elapsed_s)
+
+  # Full payload
+  payload <- list(
+    meta = list(
+      label         = play_label,
+      game_string   = play_data$game_string,
+      play_per_game = play_data$play_per_game,
+      duration_s    = round(play_data$duration_s, 2)
+    ),
+    answers   = answers,
+    ball      = ball_clean,
+    runners   = runners_clean,
+    defenders = defenders_clean
+  )
+
+  write_json(payload, filename, pretty = TRUE, auto_unbox = TRUE)
+  cat("Exported:", filename, "\n")
+}
+
+#export all three plays with defender data
+export_play_json_v3(
+  play1_data, play1_times, play1_runners_speed,
+  "Extra-base hit with relay throws",
+  "play1_extra_base.json"
+)
+
+export_play_json_v3(
+  play2_data, play2_times, play2_runners_speed,
+  "Wall deflection chaos play",
+  "play2_wall_deflection.json"
+)
+
+export_play_json_v3(
+  play3_data, play3_times, play3_runners_speed,
+  "Close play at the plate",
+  "play3_close_play.json"
+)
+```
