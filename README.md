@@ -2,7 +2,7 @@
 An interactive jumbotron fan experience built for the 2026 SMT Data Challenge.
 
 ## Demo
-Live app: https://adfoster234.github.io/race-the-replay/scoreboard.html
+Live app: https://adfoster234.github.io/Race-The-Replay/scoreboard.html
 
 ## Overview
 Race the Replay transforms Minor League Baseball player tracking data into 
